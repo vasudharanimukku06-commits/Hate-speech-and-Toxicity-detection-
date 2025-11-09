@@ -1,0 +1,121 @@
+11.09 7:07 AM
+Python project
+# ==========================================================
+#  UNIVERSAL HATE SPEECH AUTO-DELETION SYSTEM (PRODUCTION MODE)
+# - No usernames required
+# - No deletion or moderation messages shown publicly
+# - Offensive/hate comments silently removed
+# - Safe comments remain visible
+# - Deleted comments saved privately to 'deleted_log.json'
+# ==========================================================
+
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
+from datetime import datetime
+import json
+import os
+
+# ---------------- TOXICITY MODEL ----------------
+class ToxicityModel:
+    LABELS = ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
+
+    def __init__(self, model_name="unitary/toxic-bert", threshold=0.5):
+        self.threshold = threshold
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f" Loading model '{model_name}' on {self.device} ...")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_name).to(self.device)
+        self.model.eval()
+
+    def predict(self, text):
+        encoded = self.tokenizer(text, return_tensors="pt", truncation=True, padding=True).to(self.device)
+        with torch.no_grad():
+            logits = self.model(**encoded).logits[0]
+            probs = torch.sigmoid(logits).cpu().numpy()
+        return {label: float(prob) for label, prob in zip(self.LABELS, probs)}
+
+    def is_toxic(self, text):
+        scores = self.predict(text)
+        return any(v > self.threshold for v in scores.values()), scores
+
+
+# ---------------- MODERATOR SYSTEM ----------------
+class LiveChatModerator:
+    """
+    Real-time comment moderator.
+    - Deletes hate/offensive comments silently.
+    - Keeps visible comments public.
+    - Stores deleted comments privately (saved to file).
+    """
+    def __init__(self, model, log_file="deleted_log.json"):
+        self.model = model
+        self.visible_comments = []   # safe/public comments
+        self.log_file = log_file
+
+        # Ensure private log file exists
+        if not os.path.exists(log_file):
+            with open(log_file, "w", encoding="utf-8") as f:
+                json.dump([], f)
+
+    def process_comment(self, text):
+        text = text.strip()
+        if not text:
+            return
+
+        toxic, scores = self.model.is_toxic(text)
+        timestamp = datetime.utcnow().isoformat() + "Z"
+
+        if toxic:
+            # Silently delete (store privately)
+            entry = {
+                "timestamp": timestamp,
+                "text": text,
+                "scores": scores
+            }
+            self._save_deleted(entry)
+        else:
+            # Keep visible
+            self.visible_comments.append({
+                "timestamp": timestamp,
+                "text": text
+            })
+
+    def _save_deleted(self, entry):
+        """Save deleted comment privately for moderators."""
+        try:
+            with open(self.log_file, "r+", encoding="utf-8") as f:
+                data = json.load(f)
+                data.append(entry)
+                f.seek(0)
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            pass  # silent fail — user never sees this
+
+    def show_visible(self):
+        """Display only clean comments to the public."""
+        print("\n Public Chat:")
+        if not self.visible_comments:
+            print("(No visible comments yet.)")
+        for c in self.visible_comments:
+            print(f" - {c['text']}")
+
+
+# ---------------- RUN INTERACTIVE CHAT ----------------
+model = ToxicityModel(threshold=0.5)
+chat = LiveChatModerator(model, log_file="deleted_log.json")
+
+print("\n Live Chat Simulation Started")
+print("Type comments (press Enter after each).")
+print("Toxic/hate comments are silently removed.")
+print(" To stop, go to Runtime → 'Interrupt execution' in Colab.\n")
+
+while True:
+    try:
+        comment = input(" Comment: ")
+        chat.process_comment(comment)
+        chat.show_visible()
+
+    except KeyboardInterrupt:
+        print("\n\n🛑 Session Ended.")
+        print("(Moderator logs saved privately in 'deleted_log.json')\n")
+        break
