@@ -80,4 +80,4 @@ Dashboard for moderators to analyze deleted comments and trends.
 🧑‍💻 Author
 
 Developed by: M.Vasudha Rani
-GitHub: vasudharani.mukku@gmail.com
+GitHub: vasudharani.mukku06@gmail.com
